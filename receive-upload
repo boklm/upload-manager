@@ -1,0 +1,91 @@
+#!/usr/bin/perl -w
+use strict;
+use File::Temp;
+use Cwd qw(getcwd);
+use YAML::XS qw(LoadFile);
+use Digest::SHA qw(sha256_hex);
+use File::Slurp;
+use Template;
+use String::ShellQuote;
+
+my $conf_dir = '/etc/upload-manager';
+my $keyring_dir = "$conf_dir/keyring";
+my $tmpl_dir = "$conf_dir/scripts";
+my $config = LoadFile($conf_dir . '/' . whoami() . '.conf');
+
+sub config {
+    my ($project, $key) = @_;
+    return $config->{projects}{$project}{$key} || $config->{$key};
+}
+
+sub whoami {
+    my ($whoami) = getpwuid($<);
+    return $whoami;
+}
+
+sub d {
+    chdir '/';
+    print STDERR $_[0], "\n";
+    exit 1;
+}
+
+sub keyring {
+    my ($project) = @_;
+    my $keyring = config($project, 'keyring');
+    return $keyring =~ m|^/| ? $keyring : "$keyring_dir/$keyring";
+}
+
+sub checkfiles {
+    my ($upload) = @_;
+    ref $upload->{files} eq 'HASH' || d 'No files defined';
+    foreach my $file (keys %{$upload->{files}}) {
+	d "Incorrect file path $file" if $file =~ m|/|;
+	d "File $file does not exist" unless -f $file;
+	d "Incorrect sha256 for file $file"
+		unless sha256_hex(read_file($file)) eq $upload->{files}{$file};
+    }
+}
+
+sub tmpl {
+    my ($project, $upload, $input, $output) = @_;
+    my $template = Template->new(
+	ENCODING => 'utf8',
+	INCLUDE_PATH => $tmpl_dir,
+    );
+    my $vars = {
+	config => sub { config($project, @_) },
+	u => $upload,
+	shell_quote => \&shell_quote,
+    };
+    $template->process($input, $vars, $output)
+    	|| d("Error using template $input:\n" . $template->error());
+}
+
+sub execupload {
+    my ($project, $upload) = @_;
+    my (undef, $scriptfile) = File::Temp::tempfile;
+    tmpl($project, $upload, config($project, 'upload_script'), $scriptfile);
+    chmod 0700, $scriptfile;
+    my $res = system($scriptfile);
+    unlink $scriptfile;
+    d "Error uploading file" unless $res == 0;
+}
+
+sub receive_upload {
+    my $tmpdir = File::Temp->newdir() || die "Error creating temp dir";
+    chdir $tmpdir || exit 1;
+    system('tar', '-xf', '-') && d "Error receiving files";
+    -f 'upload.conf' || d 'No upload.conf';
+    my $upload = LoadFile('upload.conf') || d 'Error loading upload.conf';
+    my $project = $upload->{project} || d 'No project defined';
+    $config->{projects}{$project} || d 'Unknown project';
+    $upload->{version} || d 'No version defined';
+    system('gpg', '--keyring', keyring($project), '--no-default-keyring',
+           '--verify', 'upload.conf.sig')
+       && d 'Error verifying signature for upload.conf';
+    checkfiles($upload);
+    execupload($project, $upload);
+    chdir '/';
+}
+
+receive_upload;

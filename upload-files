@@ -1,0 +1,54 @@
+#!/usr/bin/perl -w
+use strict;
+use Getopt::Long;
+use Digest::SHA qw(sha256_hex);
+use File::Copy;
+use File::Slurp;
+use File::Temp;
+use File::Basename;
+use YAML::XS qw(DumpFile);
+
+sub d {
+    print STDERR @_, "\n";
+    exit 1;
+}
+
+sub usage {
+    chdir '/';
+    print STDERR "usage: upload-files --dest <login\@host> --project <project> --version <version> [--key <key>] files...\n";
+    exit 1;
+}
+
+sub get_options {
+    my @options = qw(dest=s project=s version=s key=s);
+    my %opt;
+    Getopt::Long::GetOptionsFromArray(\@_, \%opt, @options) || usage;
+    return (\%opt, \@_);
+}
+
+sub make_upload {
+    my $tmpdir = File::Temp::newdir;
+    my ($options, $files) = get_options(@ARGV);
+    usage unless @$files;
+    foreach my $o (qw(dest project version)) {
+	usage unless $options->{$o};
+    }
+    my $upload = {
+	project => $options->{project},
+	version => $options->{version},
+	files   => {},
+    };
+    for my $file (@$files) {
+	-f $file || d "$file is not a file";
+	copy($file, $tmpdir) || d "Failed to copy $file";
+	$upload->{files}{basename($file)} = sha256_hex(read_file($file));
+    }
+    chdir $tmpdir;
+    DumpFile('upload.conf', $upload);
+    system('gpg', ($options->{key} ? ('--local-user', $options->{key}) : ()),
+	'--detach-sign', 'upload.conf') == 0 || d 'Error signing upload.conf';
+    system('tar cvf /tmp/z.tar .');
+    chdir '/';
+}
+
+make_upload;
