@@ -47,7 +47,7 @@ sub make_upload {
     DumpFile('upload.conf', $upload);
     system('gpg', ($options->{key} ? ('--local-user', $options->{key}) : ()),
 	'--detach-sign', 'upload.conf') == 0 || d 'Error signing upload.conf';
-    system('tar cvf /tmp/z.tar .');
+    system("tar cf - . | ssh $options->{dest}") == 0 || d 'Error uploading files';
     chdir '/';
 }
 
