@@ -80,6 +80,7 @@ sub receive_upload {
     my $project = $upload->{project} || d 'No project defined';
     $config->{projects}{$project} || d 'Unknown project';
     $upload->{version} || d 'No version defined';
+    d 'Incorrect version' if $config->{version} =~ m|/|;
     system('gpg', '--keyring', keyring($project), '--no-default-keyring',
            '--verify', 'upload.conf.sig')
        && d 'Error verifying signature for upload.conf';
