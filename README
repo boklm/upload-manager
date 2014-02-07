@@ -1,0 +1,47 @@
+This repository contains a prototype of some scripts to manage uploads.
+One script to upload files, and one to receive them on the server.
+
+On the server, it is using this configuration directory, in the path
+/etc/upload-manager:
+https://github.com/boklm/upload-manager-conf
+This configuration contains gpg keyring files, a script to move the
+received files to the correct place (scripts/copy-dist), and a main
+configuration file which includes the list of valid projects, name of
+gpg keyring file to verify upload.
+
+The upload command is something like that:
+
+ $ ./upload-files --dest dist@localhost --project test --version 1.2.3 \
+       file1 file2
+
+When you run this command, the script will create a temporary directory
+where it copy the files, and create a gpg signed file upload.conf which
+contains this:
+
+  files:
+    file1: 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865
+    file2: 53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3
+  project: test
+  version: 1.2.3
+
+It will then run 'tar -cf - . | ssh dist@localhost' to send all the
+files to a script receiving them on the server.
+
+On the server (localhost in my test), I created a user 'dist', with a
+file .ssh/authorized_keys containing this:
+
+  command="/usr/bin/receive-upload" ssh-dss AAAAB3NzaC1kc...
+
+The command option specify that the receive-upload script should be run
+instead of the normal shell.
+
+The receive-upload script creates a temporary directory, and use
+'tar -xf -' to extract the files it receives in the temporary directory.
+It then reads the 'upload.conf' file, find the project name and uses the
+corresponding gpg keyring file to check the signature of the upload.conf
+file. It then verify the checksum of all files, and run the script
+scripts/copy-dist which copy the files to their location. We can extend
+this script to do other things: check that there is a sha256sum.txt
+file, signed by the right key, remove older versions when a new one is
+uploaded, maybe send an email.
+
